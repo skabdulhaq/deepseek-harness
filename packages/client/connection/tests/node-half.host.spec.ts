@@ -161,13 +161,13 @@ describe('connection node half', () => {
     await dispose()
   })
 
-  it('pins privileged methods to loopback even for a declared trusted authority', async () => {
+  it('lets a declared trusted authority reach privileged methods and still refuses untrusted hosts', async () => {
     const { routes, dispose } = await mounted({ trustedHosts: ['harness.example'] })
     // The privileged set: native dialogs plus the whole settings/credential
     // configuration plane, reads included, plus the one method that makes the
-    // host fetch a caller-chosen URL. The same declared authority reaches
-    // ordinary reads (carrier-level 404 from the empty proxy proves the fence
-    // passed), but each privileged method stays loopback-only and 403s.
+    // host fetch a caller-chosen URL. A declared authority now passes the
+    // fence — the carrier-level 404 from the empty proxy proves the bridge
+    // ran — while any other host keeps the plain-403 fence answer.
     for (const method of [
       'host.pickDirectory', 'host.openPath',
       'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
@@ -178,17 +178,20 @@ describe('connection node half', () => {
       // drive the host desktop.
       'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
     ]) {
-      const denied = fakeResponse()
+      const passed = fakeResponse()
       await routes[0]!.handler(
         fakeRequest({ host: 'harness.example' }, `${API_PATH}/${method}`),
+        passed.response,
+      )
+      expect(passed.state.status).toBe(404) // fence passed; the empty proxy carrier answers 404
+      const denied = fakeResponse()
+      await routes[0]!.handler(
+        fakeRequest({ host: 'other.example' }, `${API_PATH}/${method}`),
         denied.response,
       )
       expect(denied.state.status).toBe(403)
       expect(denied.state.body).toBe('forbidden')
     }
-    const read = fakeResponse()
-    await routes[0]!.handler(fakeRequest({ host: 'harness.example' }), read.response)
-    expect(read.state.status).not.toBe(403)
     await dispose()
   })
 
@@ -453,26 +456,29 @@ describe('connection node half over a real HTTP server', () => {
     })
   }
 
-  it('answers a declared LAN authority with 403 on every configuration method, over real HTTP', async () => {
+  it('lets a declared authority reach configuration methods and refuses untrusted hosts, over real HTTP', async () => {
     // The fence's input is a real IncomingMessage parsed by Node from the
     // wire, not a hand-assembled object: the Host header a LAN browser sends
-    // is exactly what decides loopback-only here, so the boundary is asserted
+    // is exactly what decides trust here, so the boundary is asserted
     // against the parse the server actually performs.
     const { routes, dispose } = await mounted({ trustedHosts: ['harness.example'] })
     const { port, close } = await serve(routes)
     try {
       // Reads are as privileged as writes: describe returns the exposed
       // configuration, and credentials.describe probes arbitrary env-var names.
+      // A declared authority now passes the fence — 404 is the empty proxy's
+      // carrier answer — while any other host keeps the plain-403 fence answer.
       for (const method of [
         'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
         'credentials.describe', 'credentials.set', 'credentials.unset',
         'host.pickDirectory', 'host.openPath',
         // Carries a draft credential and turns the host into a fetcher for a
-        // URL the caller picked: an anonymous LAN caller must not reach it.
+        // URL the caller picked: an untrusted caller must not reach it.
         'llm.discoverModels',
         'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
       ]) {
-        expect([method, await call(port, method, 'harness.example')]).toEqual([method, 403])
+        expect([method, await call(port, method, 'harness.example')]).toEqual([method, 404])
+        expect([method, await call(port, method, 'other.example')]).toEqual([method, 403])
       }
       // The model catalog stays reachable for the same authority: a LAN
       // client's model picker needs it, and it carries no key or endpoint
@@ -487,6 +493,47 @@ describe('connection node half over a real HTTP server', () => {
       }
       // Loopback reaches everything, configuration included.
       expect(await call(port, 'settings.describe', `127.0.0.1:${String(port)}`)).toBe(404)
+    } finally {
+      await close()
+      await dispose()
+    }
+  })
+
+  it('admits every host authority when trustedHosts contains a wildcard', async () => {
+    for (const wildcard of ['0.0.0.0', '*']) {
+      const { routes, dispose } = await mounted({ trustedHosts: [wildcard] })
+      const { port, close } = await serve(routes)
+      try {
+        // A completely unrelated authority now passes the Host fence — 404 is
+        // the empty proxy's carrier answer, privileged methods included.
+        expect(await call(port, 'settings.describe', 'anything.example')).toBe(404)
+        expect(await call(port, 'session.list', 'phone.tailnet.example')).toBe(404)
+      } finally {
+        await close()
+        await dispose()
+      }
+    }
+  })
+
+  it('keeps the cross-site refusal when a wildcard disables the Host fence', async () => {
+    const { routes, dispose } = await mounted({ trustedHosts: ['0.0.0.0'] })
+    const { port, close } = await serve(routes)
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: '127.0.0.1', port, path: `${API_PATH}/session.list`, method: 'GET',
+            headers: { host: 'anything.example', 'sec-fetch-site': 'cross-site' },
+          },
+          (response) => {
+            response.resume()
+            response.on('end', () => { resolve(response.statusCode ?? 0) })
+          },
+        )
+        request.on('error', reject)
+        request.end()
+      })
+      expect(status).toBe(403)
     } finally {
       await close()
       await dispose()

@@ -38,6 +38,16 @@ function parseAuthority(authority: string): URL | undefined {
 }
 
 /**
+ * Wildcard trust entries that admit every Host authority, disabling the
+ * DNS-rebinding Host fence: the IPv4 any-address literal `0.0.0.0` (the
+ * practical allow-all spelling) and the conventional `*`. Port-qualified
+ * spellings stay literal host matches. A wildcard is an explicit
+ * Host-fence opt-out, valid only where a real authentication layer guards
+ * the surface.
+ */
+const WILDCARD_TRUST_ENTRIES = new Set(['*', '0.0.0.0'])
+
+/**
  * Assert one configured `trustedHosts` entry is a bare authority (`host` or
  * `host:port`) in canonical form: it must survive WHATWG parsing unchanged
  * (case aside). Anything parsing would silently rewrite is refused as a typo
@@ -52,6 +62,7 @@ function parseAuthority(authority: string): URL | undefined {
  * @param entry - the configured value, verbatim.
  */
 export function assertTrustedAuthority(entry: string): void {
+  if (WILDCARD_TRUST_ENTRIES.has(entry)) return
   const entryUrl = parseAuthority(entry)
   if (entryUrl !== undefined && canonicalAuthority(entry, entryUrl) === entry.toLowerCase()) return
   throw new Error(`client-connection: trustedHosts entry ${JSON.stringify(entry)} is not a bare host[:port] authority`)
@@ -78,6 +89,8 @@ function canonicalAuthority(entry: string, entryUrl: URL): string {
  * normalization, so case and a redundant `:80` never decide trust.
  */
 function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): boolean {
+  // A wildcard entry admits every authority (DNS-rebinding Host fence off).
+  if (trustedHosts.some(entry => WILDCARD_TRUST_ENTRIES.has(entry))) return true
   return trustedHosts.some((entry) => {
     const entryUrl = parseAuthority(entry)
     if (entryUrl === undefined) return false
@@ -90,7 +103,7 @@ function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): bool
 /**
  * Decide whether one /api request may reach the RPC bridge.
  * @param request - Node HTTP or Fetch request facts (headers).
- * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, or port-less `host` matching any port.
+ * @param trustedHosts - non-loopback authorities this deployment serves: exact `host:port`, port-less `host` matching any port, or the wildcard `0.0.0.0`/`*` admitting every authority.
  * @returns true when the Host is ours (loopback or trusted) and any attached browser markers are same-origin.
  */
 export function isTrustedApiRequest(request: ApiTrustRequest, trustedHosts: readonly string[]): boolean {
