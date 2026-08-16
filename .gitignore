@@ -38,4 +38,4 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
-*.patch
+data.patch

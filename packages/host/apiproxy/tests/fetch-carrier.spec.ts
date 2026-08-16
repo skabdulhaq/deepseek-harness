@@ -803,3 +803,28 @@ describe('resolveBase', () => {
     }
   })
 })
+
+describe('secure-context fallback', () => {
+  it('mints correlation ids when crypto.randomUUID is unavailable (insecure origin)', async () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues(bytes: Uint8Array): Uint8Array { return bytes.fill(7) },
+    })
+    try {
+      const c = client()
+      const seen: RpcMessage[] = []
+      const unsubscribe = c.subscribeEnvelopes((batch) => { seen.push(...batch) })
+      await c.sessions.list({})
+      await new Promise((resolve) => { setTimeout(resolve, 0) })
+      unsubscribe()
+      const request = seen.find(message => message.type === 'client-request')
+      expect(request?.type).toBe('client-request')
+      if (request?.type !== 'client-request') return
+      // Version-4 shape with the variant bits set (0x47/0x87 from the stub's 0x07 fill).
+      expect(request.rpcId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      const response = seen.find(message => message.type === 'server-response')
+      expect(response?.type === 'server-response' ? response.rpcId : undefined).toBe(request.rpcId)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

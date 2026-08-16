@@ -498,4 +498,45 @@ describe('connection node half over a real HTTP server', () => {
       await dispose()
     }
   })
+
+  it('admits every host authority when trustedHosts contains a wildcard', async () => {
+    for (const wildcard of ['0.0.0.0', '*']) {
+      const { routes, dispose } = await mounted({ trustedHosts: [wildcard] })
+      const { port, close } = await serve(routes)
+      try {
+        // A completely unrelated authority now passes the Host fence — 404 is
+        // the empty proxy's carrier answer, privileged methods included.
+        expect(await call(port, 'settings.describe', 'anything.example')).toBe(404)
+        expect(await call(port, 'session.list', 'phone.tailnet.example')).toBe(404)
+      } finally {
+        await close()
+        await dispose()
+      }
+    }
+  })
+
+  it('keeps the cross-site refusal when a wildcard disables the Host fence', async () => {
+    const { routes, dispose } = await mounted({ trustedHosts: ['0.0.0.0'] })
+    const { port, close } = await serve(routes)
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: '127.0.0.1', port, path: `${API_PATH}/session.list`, method: 'GET',
+            headers: { host: 'anything.example', 'sec-fetch-site': 'cross-site' },
+          },
+          (response) => {
+            response.resume()
+            response.on('end', () => { resolve(response.statusCode ?? 0) })
+          },
+        )
+        request.on('error', reject)
+        request.end()
+      })
+      expect(status).toBe(403)
+    } finally {
+      await close()
+      await dispose()
+    }
+  })
 })

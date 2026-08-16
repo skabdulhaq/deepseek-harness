@@ -54,7 +54,10 @@ export interface ConnectionConfig {
    * request whose Host is neither loopback nor listed here, so a
    * non-loopback (`0.0.0.0`) deployment must declare the names it is reached
    * by (the dsh CLI derives the machine's LAN IP literals itself). An entry
-   * that is not a bare, canonical authority fails the plugin load.
+   * that is not a bare, canonical authority fails the plugin load. The
+   * wildcard entries `0.0.0.0` and `*` admit every Host authority, disabling
+   * the DNS-rebinding Host fence (valid only where a real authentication
+   * layer guards the surface).
    */
   trustedHosts?: string[]
   /** Maximum buffered JSON body for every `/api` request. */
