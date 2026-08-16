@@ -1,0 +1,11 @@
+services:
+  deepseek-harness:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deepseek-harness
+    ports:
+      - "3080:3080"
+    restart: unless-stopped
+    volumes:
+      - /root/harness-sandbox/data:/app/data
